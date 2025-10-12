@@ -44,6 +44,19 @@ If the [Uptime integration](https://www.home-assistant.io/integrations/uptime) i
     3. Use the device selector to ignore or flag slow talkers, and/or paste `device_id: note` entries (`device_id` is part of the URL when you look at individual devices).
 3. Save the script and call it manually or via automation (e.g. on a time pattern). If using Uptime and your HA starts up, it will just keep aborting until enough time (that you set up) elapsed to avoid flagging slowly-initializig devices.
 
+The automation to run this scan every 5 minutes can look like:
+```yaml
+alias: "Missing devices: run scan"
+description: ""
+triggers:
+  - minutes: /5
+    trigger: time_pattern
+actions:
+  - action: script.missing_devices_monitor
+    data: {}
+mode: single
+```
+
 ## How It Works
 
 - The blueprint scans the configured domains of entities and picks a single entity per device.
