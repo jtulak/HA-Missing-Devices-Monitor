@@ -4,7 +4,7 @@ blueprint:
     Detects devices whose representative entity remains `unavailable` or
     `unknown` longer than allowed and posts a grouped persistent notification.
   domain: script
-  author: Honza
+  author: Zopper
   source_url: https://github.com/Honza/home-assistant/missing-devices
   input:
     alert_fast_buffer_secs:
