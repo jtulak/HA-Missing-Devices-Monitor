@@ -1,0 +1,453 @@
+blueprint:
+  name: Missing Devices Monitor
+  description: >
+    Detects devices whose representative entity remains `unavailable` or
+    `unknown` longer than allowed and posts a grouped persistent notification.
+  domain: script
+  author: Honza
+  source_url: https://github.com/Honza/home-assistant/missing-devices
+  input:
+    alert_fast_buffer_secs:
+      name: Fast Alert Buffer (seconds)
+      description: Seconds a normal device may remain `unavailable`/`unknown`
+        before it is reported.
+      default: 300
+      selector:
+        number:
+          min: 0
+          max: 604800
+          unit_of_measurement: seconds
+          mode: box
+          step: 1
+    alert_slow_buffer_secs:
+      name: Slow Alert Buffer (seconds)
+      description: Seconds a slow-talking device may remain `unavailable`/`unknown`
+        before it is reported.
+      default: 86400
+      selector:
+        number:
+          min: 0
+          max: 604800
+          unit_of_measurement: seconds
+          mode: box
+          step: 1
+    startup_grace_secs:
+      name: Startup Grace (seconds)
+      description: Skip checks while Home Assistant uptime is below this number.
+      default: 300
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: seconds
+          mode: box
+          step: 1
+    include_domains:
+      name: Included Domains
+      description: Domains whose entities will be considered when selecting
+        device representatives.
+      default:
+        - binary_sensor
+        - sensor
+        - switch
+        - light
+        - climate
+        - lock
+        - cover
+        - fan
+        - vacuum
+        - media_player
+      selector:
+        select:
+          multiple: true
+          mode: list
+          options:
+            - binary_sensor
+            - sensor
+            - switch
+            - light
+            - climate
+            - lock
+            - cover
+            - fan
+            - vacuum
+            - media_player
+    max_entities_processed:
+      name: Max Entities Processed
+      description: Optional cap on how many entities to inspect (0 disables the limit).
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 5000
+          mode: box
+          step: 1
+    notification_id:
+      name: Notification ID
+      default: missing_devices_monitor
+      selector:
+        text:
+          multiline: false
+    max_lines:
+      name: Max Lines In Notification
+      description: Trim the notification body to this many device lines (0 disables trimming).
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 200
+          mode: box
+          step: 1
+    ignored_devices_devices:
+      name: Ignored Devices
+      description: Select devices that should never be reported.
+      default: []
+      selector:
+        device:
+          multiple: true
+    ignored_devices_text:
+      name: Ignored Devices Override
+      description: "Optional lines of `device_id: note` (or just `device_id`) for additional ignored devices."
+      default: ""
+      selector:
+        text:
+          multiline: true
+    slow_talkers_devices:
+      name: Slow-Talking Devices
+      description: Devices that legitimately stay unavailable longer and should use the slow buffer.
+      default: []
+      selector:
+        device:
+          multiple: true
+    slow_talkers_text:
+      name: Slow Talkers Override
+      description: "Optional lines of `device_id: note` (or just `device_id`) for additional slow talkers."
+      default: ""
+      selector:
+        text:
+          multiline: true
+
+sequence:
+  - variables:
+      ALERT_FAST_BUFFER_SECS: !input alert_fast_buffer_secs
+      ALERT_SLOW_BUFFER_SECS: !input alert_slow_buffer_secs
+      STARTUP_GRACE_SECS: !input startup_grace_secs
+      MAX_ENTITIES_PROCESSED: !input max_entities_processed
+      INCLUDE_DOMAINS: !input include_domains
+      NOTIF_ID: !input notification_id
+      MAX_LINES: !input max_lines
+      ignored_devices_list: !input ignored_devices_devices
+      ignored_devices_text_raw: !input ignored_devices_text
+      slow_talkers_list: !input slow_talkers_devices
+      slow_talkers_text_raw: !input slow_talkers_text
+      ignored_devices_json: >-
+        {% set from_selector = ignored_devices_list %}
+        {% set manual = ignored_devices_text_raw | default('', true) %}
+        {% set lines = manual.splitlines() if manual else [] %}
+        {% set comma = joiner(',') %}
+        [
+        {% if from_selector %}
+          {% for dev in from_selector %}
+            {{ comma() }}["{{ dev }}",""]
+          {% endfor %}
+        {% endif %}
+        {% for raw in lines %}
+          {% set line = raw.strip() %}
+          {% if line %}
+            {% if ':' in line %}
+              {% set parts = line.split(':', 1) %}
+              {{ comma() }}["{{ parts[0].strip() }}","{{ parts[1].strip() }}"]
+            {% else %}
+              {{ comma() }}["{{ line }}",""]
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+        ]
+      slow_talkers_json: >-
+        {% set from_selector = slow_talkers_list %}
+        {% set manual = slow_talkers_text_raw | default('', true) %}
+        {% set lines = manual.splitlines() if manual else [] %}
+        {% set comma = joiner(',') %}
+        [
+        {% if from_selector %}
+          {% for dev in from_selector %}
+            {{ comma() }}["{{ dev }}",""]
+          {% endfor %}
+        {% endif %}
+        {% for raw in lines %}
+          {% set line = raw.strip() %}
+          {% if line %}
+            {% if ':' in line %}
+              {% set parts = line.split(':', 1) %}
+              {{ comma() }}["{{ parts[0].strip() }}","{{ parts[1].strip() }}"]
+            {% else %}
+              {{ comma() }}["{{ line }}",""]
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+        ]
+      ignored_devices: "{{ ignored_devices_json | replace('\n','') | from_json }}"
+      slow_talkers: "{{ slow_talkers_json | replace('\n','') | from_json }}"
+    alias: Configuration options - edit this
+
+  # ── Runtime guardrail: skip shortly after startup ───────────────────────────
+  - variables:
+      uptime_seconds: >-
+        {% set uptime_state = states('sensor.uptime') %}
+        {% if uptime_state not in ['unknown', 'unavailable', '', none] %}
+          {% set uptime_ts = as_timestamp(uptime_state) %}
+          {{ (as_timestamp(now()) - uptime_ts) if uptime_ts else '' }}
+        {% endif %}
+    alias: Capture current uptime
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ uptime_seconds | length > 0 and uptime_seconds | float(0) < STARTUP_GRACE_SECS | float(0) }}
+        sequence:
+          - stop: Startup grace active; skipping missing device scan.
+        alias: Still inside startup grace window
+    alias: Abort if Home Assistant just started
+
+  # ── Candidate discovery ─────────────────────────────────────────────────────
+  - variables:
+      now_ts: "{{ as_timestamp(now()) | float }}"
+      candidate_info_json: >-
+        {# 1) Gather a pre-filtered list of entities worth inspecting
+              based on the listed domains
+        #}
+        {% set candidates = states
+          | selectattr('domain', 'in', INCLUDE_DOMAINS)
+          | list %}
+        {% set visible = candidates if MAX_ENTITIES_PROCESSED <= 0
+           else candidates[:MAX_ENTITIES_PROCESSED] %}
+        {# 2) Emit JSON without mutating any list to avoid heavy State objects #}
+        {% set comma = joiner(',') %}
+        [
+        {% for s in visible %}
+          {% set lc = as_timestamp(s.last_changed) | default(0, true) %}
+          {% set lu = as_timestamp(s.last_updated) | default(0, true) %}
+          {% set is_bad = s.state in ['unavailable','unknown'] %}
+          {% if is_bad %}
+            {{ comma() }}
+            {
+              "entity_id": "{{ s.entity_id }}",
+              "domain": "{{ s.domain }}",
+              "state": "{{ s.state | trim | replace('\n', '\\n') }}",
+              "last_changed": {{ lc }},
+              "last_updated": {{ lu }},
+              "device_class": "{% if s.domain == 'binary_sensor' %}{{ s.attributes.device_class | default('') }}{% else %}{% endif %}"
+            }
+          {% endif %}
+        {% endfor %}
+        ]
+    alias: Build candidate entity snapshot
+
+  - variables:
+      reps_json: >-
+        {# Pick one representative entity per device, honoring domain priority #}
+        {% set info = candidate_info_json | replace('\n','') | from_json %}
+        {% set group_conn = info
+          | selectattr('domain','equalto','binary_sensor')
+          | selectattr('device_class','equalto','connectivity')
+          | map(attribute='entity_id')
+          | list %}
+        {% set group_bin_other = info
+          | selectattr('domain','equalto','binary_sensor')
+          | rejectattr('device_class','equalto','connectivity')
+          | map(attribute='entity_id')
+          | list %}
+        {% set group_sensor = info
+          | selectattr('domain','equalto','sensor')
+          | map(attribute='entity_id')
+          | list %}
+        {% set group_switch = info
+          | selectattr('domain','equalto','switch')
+          | map(attribute='entity_id')
+          | list %}
+        {% set group_light = info
+          | selectattr('domain','equalto','light')
+          | map(attribute='entity_id')
+          | list %}
+        {% set group_climate = info
+          | selectattr('domain','equalto','climate')
+          | map(attribute='entity_id')
+          | list %}
+        {% set others_ids = info
+          | rejectattr('domain', 'in', ['binary_sensor','sensor','switch','light','climate'])
+          | map(attribute='entity_id')
+          | list %}
+
+        {# Order by groups, deduplicate eids, and take first per device #}
+        {% set ignored_ids = ignored_devices | map(attribute=0) | list %}
+        {% set groups = [group_conn, group_bin_other, group_sensor, group_switch,
+          group_light, group_climate, others_ids] %}
+        {% set seen_eids = ',' %}
+        {% set seen_devs = ',' %}
+        {% set comma = joiner(',') %}
+
+        {
+        {% for grp in groups %}
+          {% for eid in grp %}
+            {% set eid_tag = ',' ~ eid ~ ',' %}
+            {% if eid_tag not in seen_eids %}
+              {% set seen_eids = seen_eids ~ eid ~ ',' %}
+              {% set dev = device_id(eid) %}
+              {% set disabled_by = device_attr(eid, 'disabled_by') %}
+              {# Skip disabled or ignored devices #}
+              {% if dev and dev not in ignored_ids and disabled_by == None %}
+                {% set dev_tag = ',' ~ dev ~ ',' %}
+                {% if dev_tag not in seen_devs %}
+                  {% set seen_devs = seen_devs ~ dev ~ ',' %}
+                  {{ comma() }}"{{ dev }}": "{{ eid }}"
+                {% endif %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+        {% endfor %}
+        }
+    alias: Choose representative entity per device
+    enabled: true
+
+  # ── Evaluation helpers ──────────────────────────────────────────────────────
+  - variables:
+      candidate_entity_map: >-
+        {# Rehydrate metadata by entity_id for quick lookups during evaluation #}
+        {% set info = candidate_info_json | replace('\n','') | from_json %}
+        {# Build JSON object mapping eid -> item without mutating structures #}
+        { {% set comma = joiner(',') %}
+          {% for item in info %}
+            {{ comma() }}"{{ item.entity_id }}": {{ item | tojson }}
+          {% endfor %}
+        }
+    alias: Map entities to cached metadata
+
+  # ── Missing evaluation ──────────────────────────────────────────────────────
+  - variables:
+      missing_items_json: >-
+        {# Evaluate each representative and emit JSON rows for devices needing attention #}
+        {% set by_eid = candidate_entity_map | replace('\n','') | from_json %}
+        {% set now_val = now_ts | float %}
+        {% set reps = reps_json | replace('\n','') | from_json %}
+        {% set slow_ids = slow_talkers | map(attribute=0) | list %}
+        {% set comma = joiner(',') %}
+        [
+        {% for dev, eid in reps.items() %}
+          {% set data = by_eid[eid] %}
+          {% set state = data.state %}
+          {% set lc = data.last_changed | float %}
+          {#  Here is the final decision point to filter out false positives.
+              If the device is in a bad state (unavailable/unknown) and has been
+              so for longer than the threshold, we emit it as missing.  The
+              threshold is longer for devices known to be slow talkers,
+              that only show up when they detected a change.
+          #}
+          {% set is_bad = state in ['unavailable','unknown'] %}
+          {% set bad_for = (now_val - lc) if is_bad else 0 %}
+          {% set is_slow = dev in slow_ids %}
+          {% set unavailable_threshold = ALERT_SLOW_BUFFER_SECS if is_slow else ALERT_FAST_BUFFER_SECS %}
+          {% set missing_flag = (is_bad and bad_for >= unavailable_threshold) %}
+          {% if missing_flag %}
+            {% set since_secs = bad_for | int %}
+            {% set name = state_attr(eid, 'friendly_name') or device_attr(eid, 'name') or eid %}
+            {% set area = area_name(eid) %}
+            {{ comma() }} {
+              "device_id": "{{ dev }}",
+              "entity_id": "{{ eid }}",
+              "name": "{{ name }}",
+              "area": "{{ area }}",
+              "since": {{ since_secs }},
+              "mode": "unavailable",
+              "is_slow": {{ is_slow | int }}
+            }
+          {% endif %}
+        {% endfor %}
+        ]
+    alias: Compute missing device details
+
+  - variables:
+      missing_count: |-
+        {{ (missing_items_json | replace('
+        ','') | from_json) | count }}
+    alias: Count missing devices
+
+  - variables:
+      missing_items_json_by_area: >-
+        {# Group missing devices by their area for friendlier presentation #}
+        {% set items = missing_items_json | replace('\n','') | from_json %}
+        {% set groups = items | groupby('area') %}
+        {% set comma_area = joiner(',') %}
+        {
+        {% for group in groups %}
+          {{ comma_area() }}{{ (group.grouper | default('', true)) | tojson }}: [
+            {% set comma_item = joiner(',') %}
+            {% for entry in group.list %}
+              {{ comma_item() }}{{ entry | tojson }}
+            {% endfor %}
+          ]
+        {% endfor %}
+        }
+    alias: Group missing devices by area
+
+  # ── Notification text assembly ──────────────────────────────────────────────
+  - variables:
+      lines: >-
+        {# Render grouped bullet sections while honoring MAX_LINES and whitespace expectations #}
+        {% set grouped = missing_items_json_by_area | replace('\n','') | from_json %}
+        {% set maxlines = MAX_LINES | int %}
+        {% set ns = namespace(count=0, extra=0) %}
+        {% set join_area = joiner('\n\n') %}
+        {%- for area, entries in grouped | dictsort -%}
+          {%- set area_block -%}
+            {%- set join_entry = joiner('\n') -%}
+            {%- for entry in entries -%}
+              {%- if maxlines <= 0 or ns.count < maxlines -%}
+                {% set ns.count = ns.count + 1 %}
+                {{- join_entry() -}}• [{{ entry.name }}](/config/devices/device/{{ entry.device_id }}) — unavailable since *{{ (entry.since // 3600)|int ~ 'h ' if entry.since // 3600 else '' }}{{ ((entry.since % 3600) // 60)|int ~ 'm ' if (entry.since // 60) else '' }}{{ (entry.since % 60)|int ~ 's' }}*{{ ' [slow]' if entry.is_slow else '' }}
+              {%- elif maxlines > 0 -%}
+                {% set ns.extra = ns.extra + 1 %}
+              {%- endif -%}
+            {%- endfor -%}
+          {%- endset -%}
+          {%- if area_block | trim -%}
+            {{- join_area() -}}
+            {{area if area else 'None'}}
+            {{area_block | trim}}
+          {%- endif -%}
+        {%- endfor -%}
+        {%- if ns.extra > 0 -%}
+          {{- join_area() -}}
+          {{'… ' ~ ns.extra ~ ' more not shown'}}
+        {%- endif -%}
+    alias: Render notification lines
+
+  - variables:
+      body_text: |-
+        {# Choose between the all-clear message and the grouped device report #}
+        {% if missing_count | int == 0 -%}
+          All monitored devices are reachable.
+        {% else -%}
+          **Missing devices: {{ missing_count }}**
+          {{ lines }}
+        {% endif %}
+    alias: Compose notification body
+    enabled: true
+
+  # ── Notify or dismiss persistent notification ──────────────────────────────
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ missing_count | int > 0 }}"
+            alias: missing_count > 0
+        sequence:
+          - action: persistent_notification.create
+            data:
+              title: Connectivity Watch
+              message: "{{ body_text }}"
+              notification_id: "{{ NOTIF_ID }}"
+    default:
+      - action: persistent_notification.dismiss
+        data:
+          notification_id: "{{ NOTIF_ID }}"
+    alias: Notify when missing devices exist
