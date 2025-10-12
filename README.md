@@ -1,6 +1,8 @@
 # HomeAssistant Missing Devices Monitor (Script Blueprint)
 
-Monitor your Home Assistant installation for devices that disappear, and receive a tidy, grouped notification whenever something goes missing.
+Monitor your Home Assistant installation for devices that disappear, and receive a tidy, grouped notification whenever something goes missing. [HA forum thread](https://community.home-assistant.io/t/missing-devices-monitor-script/939695)
+
+[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fjtulak%2FHA-Missing-Devices-Monitor%2Fblob%2Fmain%2Fmissing_devices.yaml)
 
 ## Features
 
@@ -50,6 +52,6 @@ If the [Uptime integration](https://www.home-assistant.io/integrations/uptime) i
 - The notification message groups flagged devices by area and renders each line using the entity’s friendly name (or the device name if the entity lacks one), so the alert shows the name you see in the UI, not the raw entity id.
 - When the script finds no missing devices, it dismisses the notification; otherwise, it updates/creates one with the grouped report.
 
-I have over a thousand of entities and the runtime of this blueprint on a low-end Odroid board is about 0.2 second. If you have significantly more entities and you are not sure how it will be handled performance wise, you can first limit the number of entities processed and then increase it in steps. Also, I suggest running this script manually first, before actually creating an automation, because while I took care to avoid memory-hogging, it is not pleasant to be locked out the moment your automations initialize after startup in and trigger OOM. Ask me how I know. :-) 
+I have over a thousand of entities and the runtime of this blueprint on a low-end Odroid board is about 0.2 second. If you have significantly more entities and you are not sure how it will be handled performance wise, you can first limit the number of entities processed and then increase it in steps. Also, I suggest running this script manually first, before actually creating an automation, because while I took care to avoid memory-hogging, it is not pleasant to be locked out the moment your automations initialize after startup and trigger OOM. Ask me how I know. :-) 
 
 
