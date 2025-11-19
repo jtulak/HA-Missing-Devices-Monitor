@@ -204,7 +204,7 @@ sequence:
       - conditions:
           - condition: template
             value_template: >
-              {{ uptime_seconds | length > 0 and uptime_seconds | float(0) < STARTUP_GRACE_SECS | float(0) }}
+              {{ uptime_seconds != '' and uptime_seconds | float(0) < STARTUP_GRACE_SECS | float(0) }}
         sequence:
           - stop: Startup grace active; skipping missing device scan.
         alias: Still inside startup grace window
